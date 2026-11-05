@@ -1,0 +1,12 @@
+{
+  "name": "fde-lab",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Қазақ тіліндегі MIPS32 Fetch Decode Execute зертханасы",
+  "scripts": {
+    "start": "python3 -m http.server 8000 --bind 0.0.0.0",
+    "test": "node tests/engine.test.mjs",
+    "test:browser": "node tests/browser.test.cjs"
+  },
+  "devDependencies": { "playwright": "1.64.1" }
+}
