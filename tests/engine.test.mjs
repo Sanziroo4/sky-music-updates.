@@ -16,3 +16,54 @@ test('pure transitions preserve prior state including memory, pending and trace'
 test('invalid opcode, reserved shamt and range rejection',()=>{assert.throws(()=>decode(0xffffffff),/Қолдау/);assert.throws(()=>decode(0x01095060),/shamt/);assert.throws(()=>encode({name:'addi',imm:32768}),/Immediate/);assert.throws(()=>encode({name:'j',target:3}),/тураланған/);});
 test('invalid fetch and backward branch signed offset',()=>{const s=run({words:[encode({name:'beq',rs:0,rt:0,imm:20}),0]});assert.match(s.error,/жарамсыз/);const loop=run({words:[encode({name:'beq',rs:0,rt:0,imm:-1}),0]},42,30);assert.equal(loop.steps,30);assert.equal(loop.error,null);assert.deepEqual(loop.trace.slice(0,4),[BASE,BASE+4,BASE,BASE+4]);});
 test('all supported instruction encodings round-trip',()=>{for(const name of ['add','addu','addi','and','or','slt','lw','sw','beq','bne','j','nop'])assert.equal(decode(encode({name})).name,name);});
+test('ADDI overflow exposes the actual ALU inputs and untruncated result at Execute',()=>{
+ let s=createMachine(examples.overflow);
+ s=step(s);s=step(s);
+ const decodeSnapshot=structuredClone(s);
+ s=step(s);
+ assert.equal(s.stage,2);
+ assert.equal(s.halted,true);
+ assert.equal(s.effect.a,2147483647);
+ assert.equal(s.effect.immediate,1);
+ assert.equal(s.effect.right,1);
+ assert.equal(s.effect.rawResult,2147483648);
+ assert.equal(s.effect.dest,10);
+ assert.equal(s.effect.result,undefined);
+ assert.equal(s.effect.overflow,true);
+ assert.equal(s.effect.writeBlocked,true);
+ assert.equal(s.changed,null);
+ assert.equal(s.pc,BASE);
+ assert.equal(s.regs[10],0);
+ assert.deepEqual(s.mem,decodeSnapshot.mem);
+ assert.deepEqual(s.program,decodeSnapshot.program);
+ assert.equal(decodeSnapshot.stage,1);
+ assert.equal(decodeSnapshot.effect,null);
+ assert.match(s.log.at(-1),/^EXECUTE ҚАТЕ · addi \$t2, \$t0, 1 · 2147483647 \+ 1 = 2147483648/);
+ assert.deepEqual(step(s),s);
+ // Replaying from the prior snapshot and restarting produce the same state.
+ assert.deepEqual(step(decodeSnapshot),s);
+ assert.equal(createMachine(examples.overflow).regs[10],0);
+});
+test('ADD overflow preserves a nonzero destination; negative overflow retains its signed calculation',()=>{
+ const add=run({words:[encode({name:'add',rs:8,rt:9,rd:10})],regs:{8:2147483647,9:1,10:123}});
+ assert.equal(add.stage,2);
+ assert.equal(add.regs[10],123);
+ assert.equal(add.effect.right,1);
+ assert.equal(add.effect.rawResult,2147483648);
+ assert.equal(add.effect.immediate,undefined);
+ assert.match(add.log.at(-1),/^EXECUTE ҚАТЕ/);
+ const negative=run({words:[encode({name:'addi',rs:8,rt:10,imm:-1})],regs:{8:0x80000000,10:99}});
+ assert.equal(negative.effect.right,-1);
+ assert.equal(negative.effect.rawResult,-2147483649);
+ assert.equal(negative.regs[10],99);
+ assert.equal(negative.pc,BASE);
+ assert.match(negative.log.at(-1),/-2147483648 \+ -1 = -2147483649/);
+});
+test('valid signed ADDI boundary writes normally without an overflow flag',()=>{
+ const s=run({words:[encode({name:'addi',rs:8,rt:10,imm:1})],regs:{8:2147483646}});
+ assert.equal(s.error,null);
+ assert.equal(s.regs[10],2147483647);
+ assert.equal(s.effect.rawResult,2147483647);
+ assert.equal(s.effect.overflow,undefined);
+ assert.equal(s.pc,BASE+4);
+});

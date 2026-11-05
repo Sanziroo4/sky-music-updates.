@@ -51,6 +51,7 @@ export function createMachine(config=examples.add,input=42){
 }
 export function step(previous){
  const s=structuredClone(previous);if(s.halted)return s;s.changed=null;s.steps++;
+ let executing=false;
  try{
  if(s.stage===-1||s.stage===2){
   if(!(s.pc in s.program)){if(s.pc===s.end&&s.pending===null){s.halted=true;s.log.push('Бағдарлама аяқталды.');return s;}throw Error('Нұсқау адресі жарамсыз: '+hex(s.pc));}
@@ -58,9 +59,16 @@ export function step(previous){
  }
  if(s.stage===0){s.decoded=decode(s.ir);s.stage=1;s.log.push('DECODE '+s.decoded.asm);return s;}
  const d=s.decoded,a=s.regs[d.rs]>>>0,b=s.regs[d.rt]>>>0,seq=(s.instrPC+4)>>>0;
- let result,dest,address,write,branch=false,target,taken=false;
+ // Execution faults belong to Execute, not the preceding Decode snapshot.
+ executing=true;s.stage=2;
+ let result,dest,address,write,right,rawResult,branch=false,target,taken=false;
  switch(d.name){
- case 'add':case 'addi':{const right=d.name==='addi'?d.imm:signed(b),n=signed(a)+right;if(n>2147483647||n< -2147483648)throw Error('Signed overflow: нәтиже 32 биттік таңбалы санға сыймайды. Регистрге жазу бұғатталды.');result=n>>>0;dest=d.name==='addi'?d.rt:d.rd;break;}
+ case 'add':case 'addi':{right=d.name==='addi'?d.imm:signed(b);rawResult=signed(a)+right;dest=d.name==='addi'?d.rt:d.rd;
+  if(rawResult>2147483647||rawResult< -2147483648){
+   s.effect={a,b,right,immediate:d.name==='addi'?d.imm:undefined,rawResult,dest,seq,actualNext:s.pc,overflow:true,writeBlocked:true};
+   throw Error('Signed overflow: Нәтиже 32 биттік таңбалы санға сыймайды. Регистрге жазу бұғатталды.');
+  }
+  result=rawResult>>>0;break;}
  case 'addu':result=(a+b)>>>0;dest=d.rd;break;
  case 'and':result=(a&b)>>>0;dest=d.rd;break;
  case 'or':result=(a|b)>>>0;dest=d.rd;break;
@@ -72,11 +80,11 @@ export function step(previous){
  if(branch&&s.delay)throw Error('Delay slot ішіндегі тармақ бұл оқу моделінде анықталмаған.');
  if(dest!==undefined&&dest!==0){s.regs[dest]=result;s.changed={type:'reg',key:dest,before:previous.regs[dest],after:result};}
  if(write!==undefined){if(address===INPUT)throw Error('Пернетақта адресі тек оқуға арналған.');s.mem[address]=write;s.changed={type:'mem',key:address,before:previous.mem[address]||0,after:write};}
- s.effect={a,b,result,dest,address,write,branch,target,taken,seq,actualNext:s.delay?s.pending:seq};
+ s.effect={a,b,right,immediate:d.name==='addi'?d.imm:undefined,rawResult,result,dest,address,write,branch,target,taken,seq,actualNext:s.delay?s.pending:seq};
  s.pc=s.delay?s.pending:seq;s.pending=null;
  if(branch)s.pending=taken?target:(s.instrPC+8)>>>0;
  s.regs[0]=0;s.stage=2;s.log.push(`EXECUTE ${d.asm}${result!==undefined?' → '+result:''}${write!==undefined?' → '+hex(address)+' = '+write:''}${branch?' → '+(taken?'тармақ алынды':'тармақ алынбады')+', delay slot '+hex(seq):''}`);
- }catch(e){s.error=e.message;s.halted=true;s.log.push('ҚАТЕ · '+e.message);}
+ }catch(e){s.error=e.message;s.halted=true;const calculation=s.effect?.overflow?`${signed(s.effect.a)} + ${s.effect.right} = ${s.effect.rawResult} · `:'';s.log.push(`${executing?'EXECUTE ҚАТЕ · '+s.decoded.asm+' · ':'ҚАТЕ · '}${calculation}${e.message}`);}
  return s;
 }
 export function run(config,input=42,limit=300){let s=createMachine(config,input);while(!s.halted&&s.steps<limit)s=step(s);return s;}
